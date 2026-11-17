@@ -157,6 +157,70 @@
         </div>
       </div>
 
+      <!-- Barra de Telemetría Manos Libres (Pasos, Velocidad y Zancada) -->
+      <div class="interactive bg-slate-900/80 backdrop-blur-md text-slate-200 rounded-xl px-3 py-1.5 border border-slate-700/60 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+        <div class="flex items-center gap-3">
+          <span>👣 Pasos: <strong id="step-count-label" class="text-white">0</strong></span>
+          <span>⚡ Vel: <strong id="speed-label" class="text-white">0.0</strong> m/s</span>
+          <span class="hidden sm:inline">Modo: <strong id="tracking-detail-label" class="text-amber-300">Simulación PC</strong></span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <label for="stride-select" class="text-slate-400">Zancada:</label>
+          <select id="stride-select" class="bg-slate-800 text-white rounded-lg px-2 py-0.5 border border-slate-600 focus:outline-none">
+            <option value="0.62">Corta (0.62 m)</option>
+            <option value="0.72" selected>Normal (0.72 m)</option>
+            <option value="0.82">Larga (0.82 m)</option>
+          </select>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- TARJETA DE LLEGADA A DESTINO (Oculta hasta llegar) -->
+    <div id="arrival-card" class="interactive hidden mx-auto w-full max-w-md bg-emerald-600 text-white rounded-2xl shadow-2xl p-4 border-2 border-emerald-300 text-center">
+      <div class="text-2xl mb-1">✅</div>
+      <h3 class="text-base sm:text-lg font-extrabold">¡Ha llegado a su destino!</h3>
+      <p id="arrival-detail" class="text-xs sm:text-sm text-emerald-100 mt-0.5">Tomografía (TAC) se encuentra a su izquierda.</p>
+      <button id="btn-new-route" class="mt-3 bg-white text-emerald-800 font-bold text-xs px-4 py-2 rounded-xl shadow hover:bg-emerald-50 transition">
+        Elegir otro servicio
+      </button>
+    </div>
+
+    <!-- BARRA INFERIOR: Minimapa Radar, Control de Caminata y Botón de Servicios -->
+    <div class="flex flex-col gap-2.5 w-full max-w-3xl mx-auto">
+      
+      <div class="flex items-end justify-between gap-2">
+        <!-- Minimapa Radar 2D de Planta Baja -->
+        <div class="interactive bg-slate-900/90 backdrop-blur-md p-2 rounded-2xl border border-slate-700/80 shadow-xl">
+          <div class="flex items-center justify-between px-1 mb-1">
+            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Plano PB</span>
+            <span id="current-coord-label" class="text-[10px] font-mono text-sky-400">Y: 0.0m</span>
+          </div>
+          <canvas id="minimap-canvas" width="130" height="150" class="rounded-xl bg-slate-950 block"></canvas>
+        </div>
+
+        <!-- Botón Principal: Cambiar Servicio + Controles de Prueba PC -->
+        <div class="interactive flex-1 flex flex-col gap-2 max-w-md">
+          <!-- Control de avance manual para probar en PC -->
+          <div class="bg-white/95 backdrop-blur-md rounded-2xl p-2.5 shadow-lg border border-slate-200 flex items-center gap-2">
+            <button id="btn-walk-hold" class="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs px-3 py-2.5 rounded-xl shadow flex items-center gap-1.5 shrink-0 transition">
+              <span>👣</span>
+              <span>Simular Paso (PC)</span>
+            </button>
+            <input id="progress-slider" type="range" min="0" max="35" step="0.1" value="0" class="w-full accent-sky-600 cursor-pointer" title="Deslizar para simular avance por el pasillo" />
+            <button id="btn-reset-pos" title="Volver al QR actual" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs p-2.5 rounded-xl shrink-0">
+              ↺
+            </button>
+          </div>
+
+          <!-- Botón grande para abrir el catálogo de servicios -->
+          <button id="btn-open-services" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm py-3.5 px-4 rounded-2xl shadow-xl border border-sky-400/40 flex items-center justify-center gap-2 transition">
+            <span>🏥</span>
+            <span>Seleccionar Servicio / Destino</span>
+          </button>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -603,13 +667,59 @@
         speakGPS(`Iniciando guía hacia ${service.nombre}. Siga la línea de color durante ${distRounded} metros.`, true);
       }
     }
+
+    /**
+     * Calcula la coordenada exacta (X, Y) y la orientación del pasillo según los metros caminados
+     */
+    function updateUserPositionAlongPath(alignCameraToCorridor = false) {
+      const path = state.activePath;
+      const cum = state.cumulativeDist;
+      const d = Math.max(0, Math.min(state.walkedDistance, state.totalRouteDistance));
+
+      if (path.length === 0) return;
+      if (path.length === 1 || state.totalRouteDistance === 0) {
+        state.userPos = { x: path[0].x, y: path[0].y };
+      } else {
+        let segIdx = 0;
+        for (let i = 1; i < cum.length; i++) {
+          if (d <= cum[i]) {
+            segIdx = i - 1;
+            break;
+          }
+          segIdx = cum.length - 2;
+        }
+
+        const segStart = path[segIdx];
+        const segEnd = path[segIdx + 1];
+        const segStartDist = cum[segIdx];
+        const segLen = cum[segIdx + 1] - segStartDist;
+        const t = segLen > 0 ? (d - segStartDist) / segLen : 0;
+
+        state.userPos = {
+          x: segStart.x + (segEnd.x - segStart.x) * t,
+          y: segStart.y + (segEnd.y - segStart.y) * t
+        };
+
+        if (alignCameraToCorridor && segLen > 0.01) {
+          state.headingRad = Math.atan2(segEnd.x - segStart.x, segEnd.y - segStart.y);
+        }
+      }
+
+      const remaining = Math.max(0, state.totalRouteDistance - d);
+      document.getElementById("distance-remaining").textContent = `${remaining.toFixed(1)} m`;
+      document.getElementById("current-coord-label").textContent = `X:${state.userPos.x.toFixed(1)} Y:${state.userPos.y.toFixed(1)}`;
+      document.getElementById("progress-slider").value = d.toFixed(1);
+
+      const srv = state.activeService;
+      const instructionEl = document.getElementById("nav-instruction");
+      const arrivalCard = document.getElementById("arrival-card");
+
       if (remaining <= 0.6) {
         instructionEl.textContent = `Destino alcanzado (${srv.lado})`;
         document.getElementById("arrival-detail").textContent = `${srv.nombre} se encuentra ${srv.lado}.`;
         arrivalCard.classList.remove("hidden");
       } else {
         arrivalCard.classList.add("hidden");
-        // Instrucción contextual según el tramo
         if ((srv.id === "ecografia" || srv.id === "hemoterapia") && state.userPos.y < 64.5) {
           const distToTurn = Math.max(0, 65.2 - state.userPos.y);
           instructionEl.textContent = `Avance ${distToTurn.toFixed(1)} m y doble 90° a la izquierda`;
@@ -624,6 +734,282 @@
       evaluateVoiceGuidance(remaining);
       renderMinimap();
     }
+
+    /**
+     * =========================================================================
+     * 4. ESCENA 3D CON THREE.JS (LÍNEA AR EN EL PISO, FLECHAS Y PIN DE DESTINO)
+     * =========================================================================
+     */
+    const canvas = document.getElementById("ar-canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 150);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    dirLight.position.set(5, 15, 5);
+    scene.add(dirLight);
+
+    const arPathGroup = new THREE.Group();
+    scene.add(arPathGroup);
+
+    const simCorridorGroup = new THREE.Group();
+    scene.add(simCorridorGroup);
+
+    let animatedChevrons = [];
+    let destinationBeacon = null;
+
+    function buildSimulatedCorridor() {
+      const floorMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85 });
+      const wallMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.9 });
+
+      const mainFloor = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 72), floorMat);
+      mainFloor.rotation.x = -Math.PI / 2;
+      mainFloor.position.set(0, 0, -32);
+      simCorridorGroup.add(mainFloor);
+
+      const leftWingFloor = new THREE.Mesh(new THREE.PlaneGeometry(22, 4.2), floorMat);
+      leftWingFloor.rotation.x = -Math.PI / 2;
+      leftWingFloor.position.set(-9.5, 0, -65.2);
+      simCorridorGroup.add(leftWingFloor);
+
+      const wallRight = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3.0, 72), wallMat);
+      wallRight.position.set(2.1, 1.5, -32);
+      simCorridorGroup.add(wallRight);
+
+      const wallLeft1 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3.0, 63), wallMat);
+      wallLeft1.position.set(-2.1, 1.5, -31.5);
+      simCorridorGroup.add(wallLeft1);
+
+      const gridHelper = new THREE.GridHelper(80, 80, 0x475569, 0x1e293b);
+      gridHelper.position.set(-5, 0.005, -35);
+      simCorridorGroup.add(gridHelper);
+    }
+
+    function createChevronTexture(hexColor) {
+      const c = document.createElement("canvas");
+      c.width = 128;
+      c.height = 128;
+      const ctx = c.getContext("2d");
+      ctx.clearRect(0, 0, 128, 128);
+
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 18;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(28, 84);
+      ctx.lineTo(64, 42);
+      ctx.lineTo(100, 84);
+      ctx.stroke();
+
+      ctx.strokeStyle = hexColor;
+      ctx.lineWidth = 10;
+      ctx.stroke();
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.needsUpdate = true;
+      return tex;
+    }
+
+    function rebuildARPathMeshes() {
+      while (arPathGroup.children.length > 0) {
+        arPathGroup.remove(arPathGroup.children[0]);
+      }
+      animatedChevrons = [];
+      destinationBeacon = null;
+
+      const path = state.activePath;
+      if (path.length < 2) return;
+
+      const colorHex = state.activeService.color;
+      const threeColor = new THREE.Color(colorHex);
+      const chevronTex = createChevronTexture(colorHex);
+
+      const ribbonMat = new THREE.MeshBasicMaterial({
+        color: threeColor,
+        transparent: true,
+        opacity: 0.78,
+        side: THREE.DoubleSide
+      });
+
+      const borderMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide
+      });
+
+      for (let i = 1; i < path.length; i++) {
+        const p1 = path[i - 1];
+        const p2 = path[i];
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 0.05) continue;
+
+        const midX = (p1.x + p2.x) / 2;
+        const midZ = -(p1.y + p2.y) / 2;
+        const angleY = Math.atan2(dx, dy);
+
+        const ribbon = new THREE.Mesh(new THREE.PlaneGeometry(0.55, len), ribbonMat);
+        ribbon.rotation.x = -Math.PI / 2;
+        ribbon.rotation.z = -angleY;
+        ribbon.position.set(midX, 0.02, midZ);
+        arPathGroup.add(ribbon);
+
+        const border = new THREE.Mesh(new THREE.PlaneGeometry(0.68, len), borderMat);
+        border.rotation.x = -Math.PI / 2;
+        border.rotation.z = -angleY;
+        border.position.set(midX, 0.015, midZ);
+        arPathGroup.add(border);
+
+        const stepDist = 1.35;
+        const numArrows = Math.floor(len / stepDist);
+        for (let k = 1; k <= numArrows; k++) {
+          const frac = (k * stepDist) / len;
+          const ax = p1.x + dx * frac;
+          const az = -(p1.y + dy * frac);
+
+          const arrowMat = new THREE.MeshBasicMaterial({
+            map: chevronTex,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false
+          });
+          const arrow = new THREE.Mesh(new THREE.PlaneGeometry(0.75, 0.75), arrowMat);
+          arrow.rotation.x = -Math.PI / 2;
+          arrow.rotation.z = -angleY;
+          arrow.position.set(ax, 0.035, az);
+          arrow.userData = { phase: k * 0.6 };
+          arPathGroup.add(arrow);
+          animatedChevrons.push(arrow);
+        }
+      }
+
+      const endPt = path[path.length - 1];
+      const beaconGroup = new THREE.Group();
+      beaconGroup.position.set(endPt.x, 0, -endPt.y);
+
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.45, 0.75, 32),
+        new THREE.MeshBasicMaterial({ color: threeColor, side: THREE.DoubleSide })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.03;
+      beaconGroup.add(ring);
+
+      const cone = new THREE.Mesh(
+        new THREE.ConeGeometry(0.32, 0.75, 16),
+        new THREE.MeshStandardMaterial({ color: threeColor, emissive: threeColor, emissiveIntensity: 0.4 })
+      );
+      cone.rotation.x = Math.PI;
+      cone.position.y = 1.25;
+      beaconGroup.add(cone);
+
+      arPathGroup.add(beaconGroup);
+      destinationBeacon = beaconGroup;
+    }
+
+    /**
+     * =========================================================================
+     * 5. MINIMAPA RADAR 2D EN TIEMPO REAL
+     * =========================================================================
+     */
+    function renderMinimap() {
+      const mm = document.getElementById("minimap-canvas");
+      if (!mm) return;
+      const ctx = mm.getContext("2d");
+      const w = mm.width;
+      const h = mm.height;
+
+      ctx.clearRect(0, 0, w, h);
+
+      const mapToCanvas = (x, y) => {
+        const cx = 92 + x * 3.8;
+        const cy = 136 - y * 1.85;
+        return { cx, cy };
+      };
+
+      ctx.strokeStyle = "#334155";
+      ctx.lineWidth = 8;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      const pStart = mapToCanvas(0, -2);
+      const pCorner = mapToCanvas(0, 65.2);
+      const pEnd = mapToCanvas(-19.5, 65.2);
+      ctx.moveTo(pStart.cx, pStart.cy);
+      ctx.lineTo(pCorner.cx, pCorner.cy);
+      ctx.lineTo(pEnd.cx, pEnd.cy);
+      ctx.stroke();
+
+      if (state.activePath.length > 1) {
+        ctx.strokeStyle = state.activeService.color;
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        state.activePath.forEach((pt, idx) => {
+          const cPt = mapToCanvas(pt.x, pt.y);
+          if (idx === 0) ctx.moveTo(cPt.cx, cPt.cy);
+          else ctx.lineTo(cPt.cx, cPt.cy);
+        });
+        ctx.stroke();
+      }
+
+      const destPt = mapToCanvas(state.activeService.x, state.activeService.y);
+      ctx.fillStyle = state.activeService.color;
+      ctx.beginPath();
+      ctx.arc(destPt.cx, destPt.cy, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      const uPt = mapToCanvas(state.userPos.x, state.userPos.y);
+      ctx.fillStyle = "#38bdf8";
+      ctx.beginPath();
+      ctx.arc(uPt.cx, uPt.cy, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    /**
+     * =========================================================================
+     * 6. CÁMARA TRASERA REAL Y SENSORES DE ORIENTACIÓN
+     * =========================================================================
+     */
+    const video = document.getElementById("camera-feed");
+
+    async function enableRealCamera() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error("API de cámara no disponible");
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false
+        });
+        video.srcObject = stream;
+        video.style.display = "block";
+        simCorridorGroup.visible = false;
+        state.useRealCamera = true;
+        document.getElementById("cam-status-dot").className = "w-2 h-2 rounded-full bg-emerald-400";
+        document.getElementById("cam-btn-text").textContent = "Cámara AR";
+      } catch (err) {
+        disableRealCamera();
+      }
+    }
+
+    function disableRealCamera() {
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+        video.srcObject = null;
+      }
       video.style.display = "none";
       simCorridorGroup.visible = true;
       state.useRealCamera = false;
@@ -804,10 +1190,63 @@
         const btn = document.createElement("button");
         const isSelected = srv.id === state.activeService.id;
         btn.className = `text-left p-3 rounded-2xl border transition flex items-center gap-3 ${
+          isSelected
+            ? "bg-sky-50 border-sky-500 ring-2 ring-sky-200"
+            : "bg-white hover:bg-slate-50 border-slate-200"
+        }`;
+        btn.innerHTML = `
+          <span class="w-4 h-10 rounded-full shrink-0" style="background-color: ${srv.color};"></span>
+          <div class="min-w-0">
+            <div class="text-xs sm:text-sm font-bold text-slate-900 truncate">${srv.nombre}</div>
+            <div class="text-[11px] text-slate-500 truncate">${srv.categoria}</div>
+          </div>
+        `;
+        btn.addEventListener("click", () => {
+          selectService(srv);
+          document.getElementById("services-modal").classList.add("hidden");
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function selectService(srv) {
+      state.activeService = srv;
+      document.getElementById("active-service-name").textContent = srv.nombre;
+      document.getElementById("active-color-badge").style.backgroundColor = srv.color;
+      buildRouteFromAnchor(state.currentAnchorId, srv);
+    }
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    window.onload = function () {
+      // Leer parámetros de URL (?qr=QR_01_GUARDIA&destino=tomografia) para lectura directa desde QR físico
+      const params = new URLSearchParams(window.location.search);
+      const qrParam = params.get("qr");
+      const destParam = params.get("destino");
+
+      if (qrParam && SANATORIO_MAP.qr_anchors[qrParam]) {
+        state.currentAnchorId = qrParam;
+        document.getElementById("qr-selector").value = qrParam;
+      }
+      if (destParam) {
+        const foundSrv = SANATORIO_MAP.servicios.find(s => s.id === destParam);
+        if (foundSrv) {
+          state.activeService = foundSrv;
+          document.getElementById("active-service-name").textContent = foundSrv.nombre;
+          document.getElementById("active-color-badge").style.backgroundColor = foundSrv.color;
+        }
+      }
+
+      buildSimulatedCorridor();
+      buildRouteFromAnchor(state.currentAnchorId, state.activeService);
+
       // Botón de inicio en pantalla de bienvenida: activa cámara + WebXR / Podómetro automático + Voz GPS
       document.getElementById("btn-start-ar").addEventListener("click", async () => {
         document.getElementById("welcome-modal").classList.add("hidden");
-        // Desbloquear síntesis de voz con el gesto del usuario
         speakGPS(`Guía por voz activada. Destino: ${state.activeService.nombre}. Siga la línea de color durante ${Math.round(state.totalRouteDistance)} metros.`, true);
         await enableRealCamera();
         await initAutomaticWalkingEngine();
