@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Sanatorio La Entrerriana - Guía WebAR Planta Baja</title>
+  <!-- Tailwind CSS para interfaz responsiva y accesible -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Three.js para renderizado 3D de líneas y flechas en el piso -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- Google Fonts: Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Inter', sans-serif;
+      background-color: #0f172a;
+    }
+    /* Video de cámara trasera en segundo plano */
+    #camera-feed {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 1;
+      display: none;
+    }
+    /* Lienzo 3D transparente sobre la cámara o con entorno hospitalario simulado */
+    #ar-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      touch-action: none;
+    }
+    /* Capa de interfaz HUD */
+    #hud-layer {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .interactive {
+      pointer-events: auto;
+    }
+    /* Scrollbar sutil para lista de servicios */
+    .custom-scroll::-webkit-scrollbar {
+      width: 6px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: rgba(241, 245, 249, 0.5);
+      border-radius: 8px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 8px;
+    }
+    @keyframes pulse-border {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.03); opacity: 0.9; }
+    }
+    .walk-btn-active {
+      animation: pulse-border 1.2s infinite;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Video de cámara real del dispositivo móvil -->
+  <video id="camera-feed" autoplay playsinline muted></video>
+
+  <!-- Escena Three.js (Líneas AR en el suelo, flechas direccionales, pin de destino) -->
+  <canvas id="ar-canvas"></canvas>
+
+  <!-- Interfaz de Usuario (HUD) -->
+  <div id="hud-layer" class="p-3 sm:p-4">
+    
+    <!-- BARRA SUPERIOR: Identidad, Selector QR y Panel de Instrucciones -->
+    <div class="flex flex-col gap-2 w-full max-w-3xl mx-auto">
+      
+      <!-- Cabecera institucional + Selector de Punto QR -->
+      <div class="interactive bg-white/95 backdrop-blur-md rounded-2xl shadow-lg px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 border border-slate-200">
+        <div class="flex items-center gap-2.5">
+          <div class="w-9 h-9 rounded-xl bg-sky-700 text-white flex items-center justify-center font-extrabold text-sm shadow-sm">
+            SLE
+          </div>
+          <div>
+            <h1 class="text-xs sm:text-sm font-bold text-slate-900 leading-tight">Sanatorio La Entrerriana</h1>
+            <p class="text-[11px] text-slate-500 font-medium">Guía WebAR • Planta Baja</p>
+          </div>
+        </div>
+
+        <!-- Selector de Ancla QR + Estado de Rastreo Manos Libres -->
+        <div class="flex flex-wrap items-center gap-1.5">
+          <label for="qr-selector" class="text-[11px] font-semibold text-slate-600 hidden sm:inline">Ancla QR:</label>
+          <select id="qr-selector" class="bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-xl px-2.5 py-1.5 border border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer">
+            <option value="QR_01_GUARDIA">📍 QR 1: Ingreso / Guardia (0.0 m)</option>
+            <option value="QR_02_IMAGENES">📍 QR 2: Imágenes / Hemo (35.0 m)</option>
+            <option value="QR_03_GIRO_ECO">📍 QR 3: Cruce Ecografía (65.2 m)</option>
+          </select>
+          <button id="btn-sensors-perm" title="Activar/Recalibrar Sensores de Caminata Automática" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-2.5 py-1.5 rounded-xl shadow-sm transition flex items-center gap-1.5">
+            <span id="sensor-status-dot" class="w-2 h-2 rounded-full bg-amber-300 animate-pulse"></span>
+            <span id="tracking-mode-badge">Activar Sensores</span>
+          </button>
+          <button id="btn-toggle-voice" title="Activar o Silenciar Guía por Voz GPS" class="bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold px-2.5 py-1.5 rounded-xl shadow-sm transition flex items-center gap-1">
+            <span id="voice-icon">🔊</span>
+            <span id="voice-btn-text" class="hidden sm:inline">Voz GPS</span>
+          </button>
+          <button id="btn-toggle-camera" title="Activar/Desactivar Cámara Real" class="bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold px-2.5 py-1.5 rounded-xl shadow-sm transition flex items-center gap-1">
+            <span id="cam-status-dot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+            <span id="cam-btn-text">Modo 3D</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Tarjeta de Navegación Activa (Distancia restante + Próxima acción) -->
+      <div id="nav-banner" class="interactive bg-slate-900/90 backdrop-blur-md text-white rounded-2xl shadow-xl p-3.5 border border-slate-700/80 flex items-center justify-between gap-3">
+        <div class="flex items-center gap-3 min-w-0">
+          <!-- Indicador de color del servicio activo -->
+          <div id="active-color-badge" class="w-11 h-11 rounded-xl shrink-0 flex items-center justify-center shadow-inner border-2 border-white/30" style="background-color: #FF6B00;">
+            <svg id="turn-icon" class="w-6 h-6 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 19V5m0 0l-6 6m6-6l6 6"/>
+            </svg>
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full bg-white/15 text-slate-200">Destino</span>
+              <h2 id="active-service-name" class="text-sm sm:text-base font-bold truncate">Tomografía (TAC)</h2>
+            </div>
+            <p id="nav-instruction" class="text-xs sm:text-sm text-slate-300 mt-0.5 truncate">Avance 35.0 m recto por pasillo central</p>
+          </div>
+        </div>
+
+        <!-- Botón Repetir Voz + Distancia restante en metros -->
+        <div class="flex items-center gap-2 shrink-0">
+          <button id="btn-repeat-voice" title="Repetir indicación por voz" class="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center border border-white/15 transition">
+            🗣️
+          </button>
+          <div class="text-right bg-white/10 px-3 py-1.5 rounded-xl border border-white/10">
+            <div id="distance-remaining" class="text-lg sm:text-xl font-extrabold leading-none text-white">35.0 m</div>
+            <div class="text-[10px] text-slate-300 font-medium mt-0.5">restantes</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- MODAL / CAJÓN DE SELECCIÓN DE SERVICIOS -->
+  <div id="services-modal" class="fixed inset-0 z-30 bg-slate-950/75 backdrop-blur-sm hidden flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div class="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+      
+      <!-- Encabezado del Modal -->
+      <div class="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+        <div>
+          <h2 class="text-base sm:text-lg font-extrabold text-slate-900">¿A qué servicio se dirige?</h2>
+          <p class="text-xs text-slate-500">Seleccione un destino para trazar la guía de color en el piso</p>
+        </div>
+        <button id="btn-close-services" class="w-9 h-9 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold flex items-center justify-center">✕</button>
+      </div>
+
+      <!-- Buscador rápido -->
+      <div class="p-3 bg-white border-b border-slate-100">
+        <input id="service-search" type="text" placeholder="🔍 Buscar tomografía, farmacia, guardia, uco..." class="w-full bg-slate-100 text-slate-900 text-sm rounded-xl px-3.5 py-2.5 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500">
+      </div>
+
+      <!-- Lista de Servicios con Código de Color -->
+      <div id="services-list" class="p-3 overflow-y-auto custom-scroll grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+        <!-- Se puebla dinámicamente desde el JSON del mapa -->
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL DE PERMISOS / BIENVENIDA INICIAL -->
+  <div id="welcome-modal" class="fixed inset-0 z-40 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6 text-center">
+      <div class="w-16 h-16 rounded-2xl bg-sky-700 text-white flex items-center justify-center font-black text-2xl mx-auto mb-4 shadow-lg">
+        SLE
+      </div>
+      <h2 class="text-xl font-extrabold text-slate-900">Guía WebAR - Planta Baja</h2>
+      <p class="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">
+        Apunte su teléfono al piso para seguir la línea de color hasta su servicio. Si está probando desde una PC o sin cámara, se activará automáticamente el <strong>Simulador 3D del Pasillo</strong>.
+      </p>
+      
+      <div class="mt-4 bg-slate-100 rounded-2xl p-3 text-left text-xs text-slate-700 space-y-1.5">
+        <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#FF6B00]"></span> <strong>Naranja:</strong> Tomografía, Cámara Gamma, Ecografía</div>
+        <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#0066CC]"></span> <strong>Azul:</strong> Hemodinamia y Unidad Coronaria (UCO)</div>
+        <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#00A859]"></span> <strong>Verde:</strong> Farmacia</div>
+        <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#7209B7]"></span> <strong>Violeta:</strong> Laboratorio y Bacteriología</div>
+      </div>
+
+      <button id="btn-start-ar" class="mt-5 w-full bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm py-3.5 px-5 rounded-2xl shadow-lg transition">
+        Activar Cámara y Caminata Automática
+      </button>
+    </div>
+  </div>
+
+  <script>
+    /**
+     * =========================================================================
+     * 1. MAPA DIGITAL VALIDADO DEL SANATORIO LA ENTRERRIANA (PLANTA BAJA)
+     * =========================================================================
+     */
+    const SANATORIO_MAP = {
+      edificio: "Sanatorio La Entrerriana",
+      planta: "Planta Baja",
+      qr_anchors: {
+        "QR_01_GUARDIA": { id: "QR_01_GUARDIA", nombre: "QR 1: Ingreso / Guardia", x: 0.0, y: 0.0, yawDeg: 0 },
+        "QR_02_IMAGENES": { id: "QR_02_IMAGENES", nombre: "QR 2: Imágenes / Hemodinamia", x: 0.0, y: 35.0, yawDeg: 0 },
+        "QR_03_GIRO_ECO": { id: "QR_03_GIRO_ECO", nombre: "QR 3: Cruce Ecografía", x: 0.0, y: 65.2, yawDeg: 90 }
+      },
+      servicios: [
+        {
+          id: "guardia_obs",
+          nombre: "Guardia de Observación",
+          categoria: "Guardia 24 hs",
+          color: "#D90429",
+          x: -1.5,
+          y: -1.5,
+          lado: "a 45° hacia la izquierda y atrás",
+          waypoints: [{ x: 0, y: 0 }, { x: -1.5, y: -1.5 }]
+        },
+        {
+          id: "escalera_30",
+          nombre: "Escalera Hab. 30's (Planta Alta)",
+          categoria: "Internación PA",
+          color: "#00B4D8",
+          x: 1.2,
+          y: 0.0,
+          lado: "a su derecha junto al ingreso",
+          waypoints: [{ x: 0, y: 0 }, { x: 1.2, y: 0.0 }]
+        },
+        {
+          id: "shockroom",
+          nombre: "Shock Room",
+          categoria: "Emergencias",
+          color: "#D90429",
+          x: 1.2,
+          y: 2.7,
+          lado: "a su derecha (pasando Ascensor 1)",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 2.7 }, { x: 1.2, y: 2.7 }]
+        },
+        {
+          id: "facturacion",
+          nombre: "Oficina de Facturación",
+          categoria: "Administración",
+          color: "#6C757D",
+          x: 1.2,
+          y: 13.05,
+          lado: "a su derecha",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 13.05 }, { x: 1.2, y: 13.05 }]
+        },
+        {
+          id: "escalera_40",
+          nombre: "Escalera Hab. 40's y Especiales",
+          categoria: "Internación PA",
+          color: "#00B4D8",
+          x: 1.2,
+          y: 15.60,
+          lado: "a su derecha (pasando Ascensor 2)",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 15.60 }, { x: 1.2, y: 15.60 }]
+        },
+        {
+          id: "laboratorio",
+          nombre: "Laboratorio y Bacteriología",
+          categoria: "Análisis Clínicos",
+          color: "#7209B7",
+          x: 1.2,
+          y: 18.00,
+          lado: "a su derecha",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 18.00 }, { x: 1.2, y: 18.00 }]
+        },
+        {
+          id: "uco",
+          nombre: "Unidad Coronaria (UCO)",
+          categoria: "Cardiología Crítica",
+          color: "#0066CC",
+          x: -1.2,
+          y: 20.75,
+          lado: "a su izquierda",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 20.75 }, { x: -1.2, y: 20.75 }]
+        },
+        {
+          id: "camara_gamma",
+          nombre: "Cámara Gamma",
+          categoria: "Medicina Nuclear",
+          color: "#FF6B00",
+          x: -1.2,
+          y: 30.45,
+          lado: "a su izquierda",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 30.45 }, { x: -1.2, y: 30.45 }]
+        },
+        {
+          id: "tomografia",
+          nombre: "Tomografía (TAC)",
+          categoria: "Diagnóstico por Imágenes",
+          color: "#FF6B00",
+          x: -1.2,
+          y: 35.00,
+          lado: "a su izquierda",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 35.00 }, { x: -1.2, y: 35.00 }]
+        },
+        {
+          id: "hemodinamia",
+          nombre: "Hemodinamia",
+          categoria: "Cardiología Intervencionista",
+          color: "#0066CC",
+          x: 1.2,
+          y: 36.10,
+          lado: "a su derecha",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 36.10 }, { x: 1.2, y: 36.10 }]
+        },
+        {
+          id: "uti_informes",
+          nombre: "UTI - Informes y Sala de Espera",
+          categoria: "Cuidados Críticos",
+          color: "#FFB703",
+          x: 1.2,
+          y: 41.80,
+          lado: "a su derecha",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 41.80 }, { x: 1.2, y: 41.80 }]
+        },
+        {
+          id: "farmacia",
+          nombre: "Farmacia",
+          categoria: "Dispensación",
+          color: "#00A859",
+          x: 1.2,
+          y: 44.95,
+          lado: "a su derecha (frente a salida emergencia)",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 44.95 }, { x: 1.2, y: 44.95 }]
+        },
+        {
+          id: "auditorio",
+          nombre: "Auditorio",
+          categoria: "Institucional",
+          color: "#005F73",
+          x: 1.2,
+          y: 52.90,
+          lado: "a su derecha",
+          waypoints: [{ x: 0, y: 0 }, { x: 0, y: 52.90 }, { x: 1.2, y: 52.90 }]
+        },
+        {
+          id: "hemoterapia",
+          nombre: "Hemoterapia / Banco de Sangre",
+          categoria: "Donantes y Transfusión",
+          color: "#9B2226",
+          x: -7.25,
+          y: 63.80,
+          lado: "a su izquierda (tras doblar 90° en el cruce)",
+          waypoints: [
+            { x: 0, y: 0 },
+            { x: 0, y: 65.20 },
+            { x: -7.25, y: 65.20 },
+            { x: -7.25, y: 63.80 }
+          ]
+        },
+        {
+          id: "ecografia",
+          nombre: "Ecografía",
+          categoria: "Diagnóstico por Imágenes",
+          color: "#FF6B00",
+          x: -18.75,
+          y: 65.20,
+          lado: "al final del pasillo izquierdo",
+          waypoints: [
+            { x: 0, y: 0 },
+            { x: 0, y: 65.20 },
+            { x: -18.75, y: 65.20 }
+          ]
+        }
+      ],
+      landmarks: [
+        { label: "Secretaría Guardia / QR 1", x: -1.4, y: 0.0, color: "#0284c7" },
+        { label: "Ascensor 1", x: 1.4, y: 1.0, color: "#475569" },
+        { label: "Facturación", x: 1.4, y: 13.05, color: "#6c757d" },
+        { label: "Ascensor 2", x: -1.4, y: 14.25, color: "#475569" },
+        { label: "Laboratorio", x: 1.4, y: 18.0, color: "#7209b7" },
+        { label: "UCO", x: -1.4, y: 20.75, color: "#0066cc" },
+        { label: "Cámara Gamma", x: -1.4, y: 30.45, color: "#ff6b00" },
+        { label: "Tomografía / QR 2", x: -1.4, y: 35.0, color: "#ff6b00" },
+        { label: "Hemodinamia", x: 1.4, y: 36.1, color: "#0066cc" },
+        { label: "UTI Informes", x: 1.4, y: 37.5, color: "#ffb703" },
+        { label: "Farmacia", x: 1.4, y: 44.95, color: "#00a859" },
+        { label: "Auditorio", x: 1.4, y: 52.9, color: "#005f73" },
+        { label: "Baños", x: 1.4, y: 56.85, color: "#64748b" },
+        { label: "Cruce 90° / QR 3", x: 0.0, y: 65.2, color: "#0284c7" },
+        { label: "Hemoterapia", x: -7.25, y: 63.6, color: "#9b2226" },
+        { label: "Ecografía", x: -18.75, y: 65.2, color: "#ff6b00" }
+      ]
+    };
+
+    /**
+     * =========================================================================
+     * 2. ESTADO GLOBAL DE NAVEGACIÓN, WEBXR 6DOF Y PODÓMETRO INERCIAL (PDR)
+     * =========================================================================
+     */
+    const state = {
+      activeService: SANATORIO_MAP.servicios.find(s => s.id === "tomografia"),
+      currentAnchorId: "QR_01_GUARDIA",
+      activePath: [],         // Lista de puntos {x, y} desde el ancla QR actual hasta el destino
+      cumulativeDist: [],     // Distancia acumulada en cada vértice de activePath
+      totalRouteDistance: 0,  // Distancia total del recorrido actual (metros)
+      walkedDistance: 0,      // Metros avanzados por el usuario desde el QR
+      userPos: { x: 0, y: 0 },// Coordenada (X, Y) actual del paciente en el plano
+      headingRad: 0,          // Ángulo de mirada horizontal (0 = +Y hacia adelante)
+      pitchRad: -0.32,        // Inclinación vertical (mirando ligeramente hacia el piso)
+      useRealCamera: false,   // True si la cámara trasera está activa
+      isWalking: false,       // True mientras mantiene presionado el botón de simulación PC
+      clock: new THREE.Clock(),
+
+      // Estado del Rastreo Automático Manos Libres
+      trackingMode: "SIM",    // "WEBXR" | "PDR" | "SIM"
+      xrSession: null,
+      xrRefSpace: null,
+      xrLastPosePos: null,    // Última posición {x, z} en metros medida por WebXR
+      pdrActive: false,       // True cuando devicemotion está escuchando pasos
+      stepCount: 0,           // Contador total de pasos detectados
+      stepLength: 0.72,       // Longitud de paso promedio en metros (calibrable)
+      currentSpeedMps: 0,     // Velocidad estimada en m/s
+      lastStepTime: 0,        // Timestamp del último paso (para debounce y velocidad)
+      filteredAccel: 9.81,    // Filtro paso bajo de magnitud de aceleración
+      dynamicThreshold: 11.2, // Umbral adaptativo para detección de picos de paso
+      peakArmed: true,        // Histéresis para evitar doble conteo en una misma pisada
+      deviceHeadingOffset: null, // Calibración inicial de brújula respecto al ancla QR
+
+      // Estado del Sintetizador de Voz GPS
+      voiceEnabled: true,
+      lastSpokenText: "",
+      spokenMilestones: {
+        start: false,
+        turnWarn: false,
+        turnNow: false,
+        nearDest: false,
+        arrived: false
+      }
+    };
+
+    /**
+     * =========================================================================
+     * 2B. MOTOR DE GUÍA POR VOZ TIPO GPS (Web Speech API - Español)
+     * =========================================================================
+     */
+    function speakGPS(text, force = false) {
+      if (!text) return;
+      state.lastSpokenText = text;
+      if (!state.voiceEnabled || !("speechSynthesis" in window)) return;
+
+      try {
+        if (force) {
+          window.speechSynthesis.cancel();
+        }
+        const utterance = new SpeechSynthesisUtterance(text);
+        const voices = window.speechSynthesis.getVoices();
+        const esVoice =
+          voices.find(v => v.lang.includes("es-AR")) ||
+          voices.find(v => v.lang.includes("es-419")) ||
+          voices.find(v => v.lang.startsWith("es"));
+        if (esVoice) utterance.voice = esVoice;
+        utterance.lang = esVoice ? esVoice.lang : "es-AR";
+        utterance.rate = 1.02;
+        utterance.pitch = 1.0;
+        window.speechSynthesis.speak(utterance);
+      } catch (e) {
+        // Silenciar errores si el navegador bloquea audio antes de interacción
+      }
+    }
+
+    function resetVoiceMilestones() {
+      state.spokenMilestones = {
+        start: false,
+        turnWarn: false,
+        turnNow: false,
+        nearDest: false,
+        arrived: false
+      };
+    }
+
+    function evaluateVoiceGuidance(remaining) {
+      const srv = state.activeService;
+      const ms = state.spokenMilestones;
+
+      // 1. Llegada al destino
+      if (remaining <= 0.6) {
+        if (!ms.arrived) {
+          ms.arrived = true;
+          speakGPS(`Ha llegado a ${srv.nombre}. El servicio se encuentra ${srv.lado}.`, true);
+        }
+        return;
+      }
+
+      // 2. Aviso de proximidad a menos de 4 metros
+      if (remaining <= 4.0 && !ms.nearDest) {
+        ms.nearDest = true;
+        speakGPS(`En ${Math.max(1, Math.round(remaining))} metros llegará a ${srv.nombre}, ${srv.lado}.`, true);
+        return;
+      }
+
+      // 3. Avisos específicos para el giro de 90° a la izquierda (Hemoterapia / Ecografía)
+      if ((srv.id === "ecografia" || srv.id === "hemoterapia") && state.currentAnchorId !== "QR_03_GIRO_ECO") {
+        const distToTurn = 65.2 - state.userPos.y;
+        if (distToTurn <= 6.0 && distToTurn > 1.8 && !ms.turnWarn) {
+          ms.turnWarn = true;
+          speakGPS(`En ${Math.round(distToTurn)} metros, prepárese para doblar a la izquierda hacia ${srv.nombre}.`, true);
+        } else if (distToTurn <= 1.8 && distToTurn > -1.0 && !ms.turnNow) {
+          ms.turnNow = true;
+          speakGPS(`Doble ahora a la izquierda y continúe por el pasillo.`, true);
+        }
+      }
+    }
+
+    /**
+     * =========================================================================
+     * 3. MOTOR DE RUTAS (CÁLCULO DINÁMICO DESDE CUALQUIER ANCLA QR)
+     * =========================================================================
+     */
+    function buildRouteFromAnchor(anchorId, service) {
+      const anchor = SANATORIO_MAP.qr_anchors[anchorId];
+      let points = [];
+
+      if (service.id === "guardia_obs" || service.id === "escalera_30") {
+        if (anchor.y > 0) {
+          points.push({ x: anchor.x, y: anchor.y });
+          points.push({ x: 0, y: 0 });
+          points.push({ x: service.x, y: service.y });
+        } else {
+          points = [...service.waypoints];
+        }
+      } else {
+        if (anchorId === "QR_01_GUARDIA") {
+          points = [...service.waypoints];
+        } else if (anchorId === "QR_02_IMAGENES") {
+          points.push({ x: 0, y: 35.0 });
+          if (service.y >= 35.0) {
+            service.waypoints.forEach(wp => {
+              if (wp.y > 35.0) points.push({ ...wp });
+            });
+          } else {
+            points.push({ x: 0, y: service.y });
+            points.push({ x: service.x, y: service.y });
+          }
+        } else if (anchorId === "QR_03_GIRO_ECO") {
+          points.push({ x: 0, y: 65.20 });
+          if (service.id === "hemoterapia") {
+            points.push({ x: -7.25, y: 65.20 });
+            points.push({ x: -7.25, y: 63.80 });
+          } else if (service.id === "ecografia") {
+            points.push({ x: -18.75, y: 65.20 });
+          } else {
+            points.push({ x: 0, y: service.y });
+            points.push({ x: service.x, y: service.y });
+          }
+        }
+      }
+
+      const cumDist = [0];
+      let total = 0;
+      for (let i = 1; i < points.length; i++) {
+        const dx = points[i].x - points[i - 1].x;
+        const dy = points[i].y - points[i - 1].y;
+        const segLen = Math.hypot(dx, dy);
+        total += segLen;
+        cumDist.push(total);
+      }
+
+      state.activePath = points;
+      state.cumulativeDist = cumDist;
+      state.totalRouteDistance = total;
+      state.walkedDistance = 0;
+      state.stepCount = 0;
+      state.currentSpeedMps = 0;
+      state.xrLastPosePos = null;
+      state.deviceHeadingOffset = null;
+      resetVoiceMilestones();
+
+      const slider = document.getElementById("progress-slider");
+      slider.max = Math.max(total, 0.5).toFixed(1);
+      slider.value = 0;
+
+      updateUserPositionAlongPath(true);
+      rebuildARPathMeshes();
+
+      // Anunciar inicio de navegación por voz
+      state.spokenMilestones.start = true;
+      const distRounded = Math.round(total);
+      if (distRounded <= 2) {
+        speakGPS(`Destino seleccionado: ${service.nombre}. Se encuentra aquí mismo, ${service.lado}.`, true);
+      } else {
+        speakGPS(`Iniciando guía hacia ${service.nombre}. Siga la línea de color durante ${distRounded} metros.`, true);
+      }
+    }
+      if (remaining <= 0.6) {
+        instructionEl.textContent = `Destino alcanzado (${srv.lado})`;
+        document.getElementById("arrival-detail").textContent = `${srv.nombre} se encuentra ${srv.lado}.`;
+        arrivalCard.classList.remove("hidden");
+      } else {
+        arrivalCard.classList.add("hidden");
+        // Instrucción contextual según el tramo
+        if ((srv.id === "ecografia" || srv.id === "hemoterapia") && state.userPos.y < 64.5) {
+          const distToTurn = Math.max(0, 65.2 - state.userPos.y);
+          instructionEl.textContent = `Avance ${distToTurn.toFixed(1)} m y doble 90° a la izquierda`;
+        } else {
+          instructionEl.textContent = `Siga la línea por ${remaining.toFixed(1)} m (${srv.lado})`;
+        }
+      }
+
+      document.getElementById("step-count-label").textContent = state.stepCount;
+      document.getElementById("speed-label").textContent = state.currentSpeedMps.toFixed(1);
+
+      evaluateVoiceGuidance(remaining);
+      renderMinimap();
+    }
+      video.style.display = "none";
+      simCorridorGroup.visible = true;
+      state.useRealCamera = false;
+      document.getElementById("cam-status-dot").className = "w-2 h-2 rounded-full bg-amber-400";
+      document.getElementById("cam-btn-text").textContent = "Modo 3D";
+    }
+
+    // Control táctil / mouse para girar la vista y mirar hacia el piso
+    let isDragging = false;
+    let prevPointer = { x: 0, y: 0 };
+
+    canvas.addEventListener("pointerdown", e => {
+      isDragging = true;
+      prevPointer = { x: e.clientX, y: e.clientY };
+    });
+
+    window.addEventListener("pointermove", e => {
+      if (!isDragging) return;
+      const dx = e.clientX - prevPointer.x;
+      const dy = e.clientY - prevPointer.y;
+      prevPointer = { x: e.clientX, y: e.clientY };
+
+      state.headingRad -= dx * 0.005;
+      state.pitchRad = Math.max(-1.15, Math.min(0.35, state.pitchRad - dy * 0.005));
+    });
+
+    window.addEventListener("pointerup", () => {
+      isDragging = false;
+    });
+
+    // Giroscopio del dispositivo móvil (cuando está disponible)
+    let initialAlpha = null;
+    window.addEventListener("deviceorientation", e => {
+      if (e.alpha === null || !state.useRealCamera) return;
+      if (initialAlpha === null) initialAlpha = e.alpha;
+      const deltaYaw = THREE.MathUtils.degToRad(e.alpha - initialAlpha);
+      state.headingRad = -deltaYaw;
+      if (e.beta !== null) {
+        // Beta ~90° es vertical, ~45° es apuntando al piso
+        const pitchFromBeta = THREE.MathUtils.degToRad(e.beta - 75);
+        state.pitchRad = Math.max(-1.15, Math.min(0.35, pitchFromBeta));
+      }
+    });
+
+    /**
+     * =========================================================================
+     * 7B. MOTOR DE CAMINATA AUTOMÁTICA (WEBXR 6DoF + PODÓMETRO INERCIAL PDR)
+     * =========================================================================
+     */
+    function updateTrackingStatusUI() {
+      const badge = document.getElementById("tracking-mode-badge");
+      const dot = document.getElementById("sensor-status-dot");
+      const detail = document.getElementById("tracking-detail-label");
+
+      if (state.trackingMode === "WEBXR") {
+        badge.textContent = "WebXR 6DoF";
+        dot.className = "w-2 h-2 rounded-full bg-emerald-300";
+        detail.textContent = "Rastreo Espacial 6DoF";
+        detail.className = "text-emerald-400";
+      } else if (state.trackingMode === "PDR") {
+        badge.textContent = "Sensores Activos";
+        dot.className = "w-2 h-2 rounded-full bg-emerald-300";
+        detail.textContent = "Podómetro Inercial";
+        detail.className = "text-emerald-400";
+      } else {
+        badge.textContent = "Activar Sensores";
+        dot.className = "w-2 h-2 rounded-full bg-amber-300 animate-pulse";
+        detail.textContent = "Simulación PC";
+        detail.className = "text-amber-300";
+      }
+    }
+
+    function handleDeviceMotion(event) {
+      const acc = event.accelerationIncludingGravity || event.acceleration;
+      if (!acc || acc.x === null) return;
+
+      const mag = Math.hypot(acc.x || 0, acc.y || 0, acc.z || 0);
+      // Filtro paso bajo suave para aislar el rebote vertical del paso
+      state.filteredAccel = state.filteredAccel * 0.8 + mag * 0.2;
+      const now = performance.now();
+
+      if (state.filteredAccel > state.dynamicThreshold && state.peakArmed) {
+        if (now - state.lastStepTime > 340) {
+          const dtSec = state.lastStepTime > 0 ? (now - state.lastStepTime) / 1000 : 0.6;
+          state.lastStepTime = now;
+          state.peakArmed = false;
+
+          state.stepCount += 1;
+          state.currentSpeedMps = Math.min(2.2, state.stepLength / Math.max(0.35, dtSec));
+          state.walkedDistance = Math.min(state.totalRouteDistance, state.walkedDistance + state.stepLength);
+          updateUserPositionAlongPath(false);
+        }
+      } else if (state.filteredAccel < state.dynamicThreshold - 0.85) {
+        state.peakArmed = true;
+      }
+
+      if (now - state.lastStepTime > 1600 && !state.isWalking) {
+        state.currentSpeedMps = 0;
+        document.getElementById("speed-label").textContent = "0.0";
+      }
+    }
+
+    async function initAutomaticWalkingEngine() {
+      // 1. Solicitar permiso explícito en iOS 13+ para acelerómetro y giroscopio
+      if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+        try {
+          const res = await DeviceMotionEvent.requestPermission();
+          if (res === "granted" && !state.pdrActive) {
+            window.addEventListener("devicemotion", handleDeviceMotion);
+            state.pdrActive = true;
+            state.trackingMode = "PDR";
+          }
+        } catch (err) {
+          // Continuar con fallback si el usuario deniega
+        }
+      } else if ("ondevicemotion" in window && !state.pdrActive) {
+        window.addEventListener("devicemotion", handleDeviceMotion);
+        state.pdrActive = true;
+        state.trackingMode = "PDR";
+      }
+
+      updateTrackingStatusUI();
+    }
+
+    /**
+     * =========================================================================
+     * 8. BUCLE DE ANIMACIÓN PRINCIPAL (60 FPS)
+     * =========================================================================
+     */
+    function renderFrame() {
+      const dt = state.clock.getDelta();
+      const elapsed = state.clock.getElapsedTime();
+
+      // Si el usuario mantiene presionado "Simular Paso (PC)", avanzar a velocidad peatonal (~1.4 m/s)
+      if (state.isWalking && state.walkedDistance < state.totalRouteDistance) {
+        state.currentSpeedMps = 1.4;
+        state.walkedDistance = Math.min(state.totalRouteDistance, state.walkedDistance + 1.4 * dt);
+        state.stepCount = Math.round(state.walkedDistance / state.stepLength);
+        updateUserPositionAlongPath(false);
+      }
+
+      // Actualizar posición y rotación de la cámara 3D según la coordenada (X, Y) del paciente
+      camera.position.set(state.userPos.x, 1.45, -state.userPos.y);
+      const euler = new THREE.Euler(state.pitchRad, -state.headingRad, 0, "YXZ");
+      camera.quaternion.setFromEuler(euler);
+
+      // Animar pulso de las flechas en el piso
+      animatedChevrons.forEach(arrow => {
+        const wave = 0.45 + 0.55 * Math.sin(elapsed * 5.0 - arrow.userData.phase);
+        arrow.material.opacity = wave;
+      });
+
+      // Animar flotación suave del pin de destino
+      if (destinationBeacon) {
+        destinationBeacon.children[1].position.y = 1.25 + Math.sin(elapsed * 3.2) * 0.12;
+        destinationBeacon.children[1].rotation.y += dt * 1.8;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    /**
+     * =========================================================================
+     * 9. INICIALIZACIÓN DE EVENTOS Y CATÁLOGO DE SERVICIOS
+     * =========================================================================
+     */
+    function renderServiceCards(filterText = "") {
+      const container = document.getElementById("services-list");
+      container.innerHTML = "";
+      const query = filterText.toLowerCase().trim();
+
+      const filtered = SANATORIO_MAP.servicios.filter(s =>
+        s.nombre.toLowerCase().includes(query) ||
+        s.categoria.toLowerCase().includes(query)
+      );
+
+      filtered.forEach(srv => {
+        const btn = document.createElement("button");
+        const isSelected = srv.id === state.activeService.id;
+        btn.className = `text-left p-3 rounded-2xl border transition flex items-center gap-3 ${
+      // Botón de inicio en pantalla de bienvenida: activa cámara + WebXR / Podómetro automático + Voz GPS
+      document.getElementById("btn-start-ar").addEventListener("click", async () => {
+        document.getElementById("welcome-modal").classList.add("hidden");
+        // Desbloquear síntesis de voz con el gesto del usuario
+        speakGPS(`Guía por voz activada. Destino: ${state.activeService.nombre}. Siga la línea de color durante ${Math.round(state.totalRouteDistance)} metros.`, true);
+        await enableRealCamera();
+        await initAutomaticWalkingEngine();
+      });
+
+      // Botón para activar o silenciar la Voz GPS
+      document.getElementById("btn-toggle-voice").addEventListener("click", () => {
+        state.voiceEnabled = !state.voiceEnabled;
+        const iconEl = document.getElementById("voice-icon");
+        const btnEl = document.getElementById("btn-toggle-voice");
+        if (state.voiceEnabled) {
+          iconEl.textContent = "🔊";
+          btnEl.classList.remove("bg-slate-600");
+          btnEl.classList.add("bg-sky-600");
+          speakGPS(state.lastSpokenText || "Guía por voz activada.", true);
+        } else {
+          iconEl.textContent = "🔇";
+          btnEl.classList.remove("bg-sky-600");
+          btnEl.classList.add("bg-slate-600");
+          if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+        }
+      });
+
+      // Botón para repetir la última indicación por voz
+      document.getElementById("btn-repeat-voice").addEventListener("click", () => {
+        if (!state.voiceEnabled) {
+          state.voiceEnabled = true;
+          document.getElementById("voice-icon").textContent = "🔊";
+          document.getElementById("btn-toggle-voice").classList.replace("bg-slate-600", "bg-sky-600");
+        }
+        const remaining = Math.max(0, state.totalRouteDistance - state.walkedDistance);
+        if (remaining <= 0.6) {
+          speakGPS(`Ha llegado a ${state.activeService.nombre}, ${state.activeService.lado}.`, true);
+        } else {
+          speakGPS(`Faltan ${Math.round(remaining)} metros para llegar a ${state.activeService.nombre}.`, true);
+        }
+      });
+
+      // Botón dedicado para activar/solicitar permisos de sensores (iOS 13+ / Android)
+      document.getElementById("btn-sensors-perm").addEventListener("click", async () => {
+        await initAutomaticWalkingEngine();
+      });
+
+      // Selector de longitud de zancada del usuario
+      document.getElementById("stride-select").addEventListener("change", e => {
+        state.stepLength = parseFloat(e.target.value);
+      });
+
+      // Alternar manualmente entre Cámara Real y Modo Simulador 3D
+      document.getElementById("btn-toggle-camera").addEventListener("click", () => {
+        if (state.useRealCamera) disableRealCamera();
+        else enableRealCamera();
+      });
+
+      // Selector de Ancla QR (simula escanear QR 1, QR 2 o QR 3)
+      document.getElementById("qr-selector").addEventListener("change", e => {
+        state.currentAnchorId = e.target.value;
+        state.deviceHeadingOffset = null; // Recalibrar brújula al escanear nuevo QR
+        buildRouteFromAnchor(state.currentAnchorId, state.activeService);
+      });
+
+      // Controles de respaldo PC (mantener presionado o arrastrar slider)
+      const walkBtn = document.getElementById("btn-walk-hold");
+      walkBtn.addEventListener("pointerdown", () => { state.isWalking = true; });
+      window.addEventListener("pointerup", () => {
+        state.isWalking = false;
+        if (state.trackingMode === "SIM") state.currentSpeedMps = 0;
+      });
+
+      document.getElementById("progress-slider").addEventListener("input", e => {
+        state.walkedDistance = parseFloat(e.target.value);
+        state.stepCount = Math.round(state.walkedDistance / state.stepLength);
+        updateUserPositionAlongPath(false);
+      });
+
+      document.getElementById("btn-reset-pos").addEventListener("click", () => {
+        state.walkedDistance = 0;
+        state.stepCount = 0;
+        state.deviceHeadingOffset = null;
+        state.xrLastPosePos = null;
+        updateUserPositionAlongPath(true);
+      });
+
+      // Apertura y cierre del modal de servicios
+      document.getElementById("btn-open-services").addEventListener("click", () => {
+        renderServiceCards();
+        document.getElementById("services-modal").classList.remove("hidden");
+      });
+      document.getElementById("btn-new-route").addEventListener("click", () => {
+        renderServiceCards();
+        document.getElementById("services-modal").classList.remove("hidden");
+      });
+      document.getElementById("btn-close-services").addEventListener("click", () => {
+        document.getElementById("services-modal").classList.add("hidden");
+      });
+      document.getElementById("service-search").addEventListener("input", e => {
+        renderServiceCards(e.target.value);
+      });
+
+      // Usar setAnimationLoop de Three.js para soportar tanto WebXR 6DoF como 60fps estándar
+      renderer.setAnimationLoop(renderFrame);
+    };
+  </script>
+</body>
+</html>
